@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RISH Apache AutoBan v8.8
+# RISH Apache AutoBan v1.0.0
 set -euo pipefail
 umask 077
 export LC_ALL=C
