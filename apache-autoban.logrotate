@@ -1,3 +1,4 @@
+# Rotation for the Apache AutoBan action log.
 /var/log/apache-autoban.log {
     weekly
     rotate 8

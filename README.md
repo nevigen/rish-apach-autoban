@@ -8,11 +8,13 @@ Apache AutoBan анализирует журналы доступа Apache, сч
 - Анализ текущих, ротированных и сжатых `.gz` журналов. Инкрементальный кэш для повторных сканирований фиксированного периода.
 - Отчёты по IP, сайтам и URL, проверка отдельного IP и интерактивное меню на русском, украинском и английском.
 
+![Главное меню Apache AutoBan 1.0.0 на русском](docs/menu-ru.png)
+
 ## Требования
 
-- Linux, Bash, Python 3.9 или новее, `flock` и firewalld с доступным `firewall-cmd`.
-- Права root для чтения журналов виртуальных хостов и запуска AutoBan.
-- Для применения блокировок нужен установленный RISH с модулем `/root/rish/scripts/firewall_management.sh` и сеанс root по SSH. Проверку SSH-контекста выполняют bridge и RISH. [RISH](https://github.com/Delo-Design/rish)
+AutoBan рассчитан на штатную установку [RISH 2.10.3 и новее](https://github.com/Delo-Design/rish) с Apache и firewalld. Bash, Python 3, `flock` и `firewall-cmd` уже есть в этом окружении. Дополнительные системные пакеты и Python-библиотеки устанавливать не нужно.
+
+Запускайте AutoBan от root для чтения журналов виртуальных хостов. Для применения блокировок нужен сеанс root по SSH. AutoBan использует модуль RISH `/root/rish/scripts/firewall_management.sh`.
 
 ## Установка
 
@@ -23,6 +25,8 @@ git clone https://github.com/nevigen/rish-apach-autoban.git
 cd rish-apach-autoban
 bash install.sh
 ```
+
+Если Git на сервере не используется, можно скачать и распаковать ZIP репозитория и запустить `bash install.sh` из распакованного каталога.
 
 Установщик размещает файлы в `/opt/apache-autoban`, создаёт команду `apache-autoban` и добавляет конфигурацию ротации журнала действий. Существующие конфигурация, стоп-слова и белый список сохраняются.
 

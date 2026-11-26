@@ -1,5 +1,5 @@
 #!/bin/bash
-# RISH is the sole writer of temporary firewall rules.
+# Delegate temporary firewall rule changes to the RISH module.
 set -o pipefail
 umask 077
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin

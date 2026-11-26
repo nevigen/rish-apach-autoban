@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Install Apache AutoBan files on a server with RISH.
 set -euo pipefail
 [[ $EUID == 0 ]] || { echo 'Run as root' >&2; exit 1; }
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"

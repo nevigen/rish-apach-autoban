@@ -1,4 +1,4 @@
-# Shared configuration loader. No executable configuration content.
+# Bash adapter for the Apache AutoBan configuration loader and validator.
 load_config() {
     local data key value
     data=$(python3 "$BASE/config.py" load) || return 1

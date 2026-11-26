@@ -1,3 +1,5 @@
+"""Load, validate and update the Apache AutoBan configuration."""
+
 import os, sys, stat, re, tempfile, fcntl
 P='/etc/apache-autoban'; NAME='config.conf'
 DEFAULTS=dict(AUTOBAN_LANG='ru',MIN_REQUESTS='3',BAN_TIME='86400',ZONE='',LOG_DIR='/var/www',STOPWORDS='/root/apache-stopwords.txt',WHITELIST='/root/apache-whitelist.txt',BAN_LOG='/var/log/apache-autoban.log')
