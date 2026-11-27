@@ -20,7 +20,7 @@ report() { local rc=0; "$@" || rc=$?; local color=$GREEN; (( rc == 0 )) || color
 run() { printf '%s%s%s\n' "$BLUE" "$BUSY" "$RESET"; report "$CORE" "$@"; }
 edit() { touch "$1" && "${EDITOR:-vi}" "$1"; }
 while true; do
- printf '\n%s========== RISH Apache AutoBan v1.0.0 ==========%s\n%s: %s | %s: %s %s\n\n' "$BLUE" "$RESET" "$THRESHOLD" "$MIN_REQUESTS" "$DURATION" "$BAN_TIME" "$SECONDS_LABEL"
+ printf '\n%s========== RISH Apache AutoBan v1.0.1 ==========%s\n%s: %s | %s: %s %s\n\n' "$BLUE" "$RESET" "$THRESHOLD" "$MIN_REQUESTS" "$DURATION" "$BAN_TIME" "$SECONDS_LABEL"
  for ((i=1;i<=19;i++)); do key=M$i; printf '%s%2d.%s %s\n' "$GREEN" "$i" "$RESET" "${!key}"; done
  printf ' 0. %s\n\n' "$EXIT"
  read -r -p "$SELECT: " choice || exit 0

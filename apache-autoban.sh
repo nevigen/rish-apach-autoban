@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RISH Apache AutoBan v1.0.0
+# RISH Apache AutoBan v1.0.1
 set -euo pipefail
 umask 077
 export LC_ALL=C
@@ -42,7 +42,7 @@ case "$MODE" in
         elif [[ -n ${2:-} ]]; then
             DATE_FILTER=$2; ROTATED=1
         else
-            DATE_FILTER="$(date -d '1 hour ago' '+%d/%b/%Y:%H:'),$(date '+%d/%b/%Y:%H:')"
+            DATE_FILTER=''
         fi ;;
     *) DATE_FILTER=${2:-} ;;   # IP address for --unban / --manual-ban / --inspect
 esac
@@ -54,12 +54,14 @@ flock -w "$LOCK_WAIT" 9 || { echo "Another AutoBan operation is running (waited 
 
 AUTOBAN_ROTATED=$ROTATED python3 -u - "$LOG_DIR" "$STOPWORDS" "$WHITELIST" "$DATE_FILTER" "$MIN_REQUESTS" "$MODE" "$ZONE" "$BAN_TIME" "$BAN_LOG" <<'PY'
 import sys, pathlib, ipaddress, re, collections, subprocess, datetime, json, os, gzip, time, zlib, stat, hashlib, tempfile, errno
+from functools import lru_cache
 from urllib.parse import unquote
 
 root, stop, white, prefix, minimum, mode, zone, duration, logfile = sys.argv[1:]
 minimum = int(minimum)
 started_at = time.monotonic()
 rotated_ok = os.environ.get('AUTOBAN_ROTATED') == '1'
+strict_match = os.environ.get('AUTOBAN_STRICT_MATCH') == '1'
 RECENT_SECONDS = 3 * 3600
 registry = pathlib.Path('/var/lib/apache-autoban/rish-bans.json')
 lang = os.environ.get('AUTOBAN_LANG', 'ru')
@@ -279,8 +281,11 @@ if mode in ('--unban', '--clear-bans'):
 
 if mode not in ('--dry-run', '--ban', '--inspect', '--top-ip', '--top-sites', '--top-urls'): sys.exit('Unknown mode')
 inspect = parse_ip(prefix) if mode == '--inspect' else None
-if inspect is not None:
-    prefix = ','.join((datetime.datetime.now() - datetime.timedelta(hours=h)).strftime('%d/%b/%Y:%H:') for h in (1, 0))
+hour_format = '%d/%b/%Y:%H:'
+now = datetime.datetime.now(datetime.timezone.utc)
+live_hours = tuple((now - datetime.timedelta(hours=h)).astimezone().strftime(hour_format) for h in (1, 0))
+if not prefix or inspect is not None:
+    prefix = ','.join(live_hours)
 prefixes = tuple(p.strip() for p in prefix.split(',') if p.strip())
 if not prefixes: sys.exit('Empty date filter')
 interval = None
@@ -307,6 +312,23 @@ words = []; allow = []
 if mode in ('--dry-run', '--ban', '--top-urls'):
     words = load_words()
     allow = whitelist()
+
+absolute_target = re.compile(r'^https?://[^/]+', re.IGNORECASE)
+strict_words = [(word, re.compile(
+    ('' if word.startswith('/') else r'(?:^|/)') + re.escape(word)
+    + ('' if word.endswith('/') else r'(?=$|[/._-])')
+)) for word in words] if strict_match else []
+
+def match_target(target):
+    if strict_match:
+        target = re.split(r'[?#]', target, maxsplit=1)[0]
+        # Only an absolute-form request target starts with a scheme and authority.
+        target = absolute_target.sub('', target, count=1) or '/'
+    raw = target.lower()
+    decoded = decode(raw).lower()
+    if strict_match:
+        return raw, [word for word, pattern in strict_words if pattern.search(raw) or pattern.search(decoded)]
+    return raw, [word for word in words if word in raw or word in decoded]
 
 counts = collections.Counter(); domains = collections.Counter(); reasons = collections.defaultdict(collections.Counter)
 allips = collections.Counter(); ipdomains = collections.defaultdict(collections.Counter); allsites = collections.Counter()
@@ -390,15 +412,17 @@ def discover():
                 if ROT_RE.search(name): yield userpath / 'logs' / name
     finally: os.close(rootfd)
 
-# Cache dry-run/ban scans; keep one historical interval separately from live.
-# Sliding intervals and TOP reports are uncached.
+# The default window overlaps across scans. Keep its two hours separate so
+# the previous hour's data can be reused when the window advances.
 cache_enabled = mode in ('--dry-run', '--ban') and not prefix.startswith('last:')
-cache_path = registry.parent / ('scan-history-v3.json' if rotated_ok else 'scan-cache-v3.json')
+hourly_cache = cache_enabled and not rotated_ok
+cache_path = registry.parent / ('scan-history-v4.json' if rotated_ok else 'scan-cache-v4.json')
 CACHE_LIMIT = 32 * 1024 * 1024
-period_key = (["range", *(dt.astimezone(datetime.timezone.utc).isoformat() for dt in interval)]
-              if interval is not None else ["prefix", *prefixes])
+period_key = ['live-hours'] if hourly_cache else (
+    ['range', *(dt.astimezone(datetime.timezone.utc).isoformat() for dt in interval)]
+    if interval is not None else ['prefix', *prefixes])
 cache_key = hashlib.sha256(json.dumps([str(pathlib.Path(root).absolute()), period_key, words,
-    [str(n) for n in allow]], ensure_ascii=True).encode()).hexdigest()
+    [str(n) for n in allow], strict_match], ensure_ascii=True).encode()).hexdigest()
 old_cache = {}; new_cache = {}
 if cache_enabled:
     try:
@@ -412,9 +436,37 @@ if cache_enabled:
                 raise OSError('unsafe cache file')
             if cs.st_size > CACHE_LIMIT: raise ValueError('cache size limit exceeded')
             with cache_path.open(encoding='utf-8') as cf: payload = json.load(cf)
-            if payload.get('key') == cache_key: old_cache = payload['files']
+            if payload.get('key') == cache_key and (
+                not hourly_cache or payload.get('hour') in live_hours
+            ):
+                old_cache = payload['files']
     except (OSError, ValueError, KeyError, TypeError) as e:
         print('Cache unavailable:', str(e), file=sys.stderr); cache_enabled = False
+hourly_cache = hourly_cache and cache_enabled
+
+
+def restore_bucket(saved):
+    return (collections.Counter({ipaddress.ip_address(ip): n for ip, n in saved['counts']}),
+            collections.Counter({(ipaddress.ip_address(ip), word): n for ip, word, n in saved['reasons']}),
+            list(saved['stats']))
+
+
+def save_bucket(bucket):
+    counts, reasons, stats = bucket
+    return {'counts': [(str(ip), n) for ip, n in counts.items()],
+            'reasons': [(str(ip), word, n) for (ip, word), n in reasons.items()], 'stats': stats}
+
+
+def new_bucket():
+    return collections.Counter(), collections.Counter(), [0, 0, 0]
+
+
+@lru_cache(maxsize=64)
+def future_hour(hour):
+    try:
+        return datetime.datetime.strptime(hour, hour_format) > now.astimezone().replace(tzinfo=None)
+    except ValueError:
+        return False
 
 # Anchor both ends of the previously consumed prefix to detect truncation/rewrite.
 def anchor(fd, offset):
@@ -440,17 +492,19 @@ for path in discover():
             compressed = path.suffix == '.gz'
             fingerprint = [st.st_size, st.st_mtime_ns, st.st_ctime_ns]
             gzip_hit = compressed and saved.get('fingerprint') == fingerprint
-            local_counts = collections.Counter(); local_reasons = collections.Counter()
-            lr = ls = lm = lo = 0; offset = 0
+            buckets = collections.defaultdict(new_bucket)
+            lm = lo = offset = 0
+            has_future_records = False
             if saved:
                 try:
                     pos = saved['offset']
                     if gzip_hit or (incremental and 0 <= pos <= st.st_size and saved['anchor'] == anchor(source.fileno(), pos)):
-                        local_counts.update({ipaddress.ip_address(k): v for k,v in saved['counts']})
-                        local_reasons.update({(ipaddress.ip_address(i), w): n for i,w,n in saved['reasons']})
-                        lr, ls, lm, lo = saved['stats']; offset = pos; cache_hits += 1
+                        buckets.update({hour: restore_bucket(bucket) for hour, bucket in saved['buckets'].items()
+                                        if not hourly_cache or hour in live_hours})
+                        lm, lo = saved['malformed'], saved['oversized']
+                        offset = pos; cache_hits += 1
                 except (KeyError, TypeError, ValueError):
-                    local_counts.clear(); local_reasons.clear(); lr = ls = lm = lo = offset = 0; gzip_hit = False
+                    buckets.clear(); lm = lo = offset = 0; gzip_hit = False
             source.seek(offset)
             reader = gzip.GzipFile(fileobj=source) if path.suffix == '.gz' else source
             try:
@@ -473,39 +527,45 @@ for path in discover():
                     if incremental: offset += len(line)
                     m = pattern.match(line.decode('utf-8', errors='replace'))
                     if not m: lm += 1; continue
-                    if not in_period(m[2]): continue
+                    hour = m[2][:len(live_hours[0])] if hourly_cache else ''
+                    if not in_period(m[2]):
+                        # Leave this file uncached if an already-read record may
+                        # enter the reporting window after it advances.
+                        if hourly_cache and future_hour(hour): has_future_records = True
+                        continue
+                    bucket_counts, bucket_reasons, bucket_stats = buckets[hour]
                     try:
                         ip = ipaddress.ip_address(m[1])
                         if '%' in m[1]: raise ValueError('scoped IP')
-                    except ValueError: lm += 1; continue
-                    lr += 1
+                    except ValueError: bucket_stats[2] += 1; continue
+                    bucket_stats[0] += 1
                     if mode == '--top-ip':
                         allips[ip] += 1; ipdomains[ip][domain] += 1; continue
                     if mode == '--top-sites': allsites[domain] += 1; continue
                     if mode == '--inspect':
                         if inspect == ip: print(repr(domain), m[2], repr(m[3]))
                         continue
-                    if excluded(ip, allow): ls += 1; continue
-                    raw = m[3].lower(); decoded = decode(raw).lower()
-                    matches = [w for w in words if w in raw or w in decoded]
+                    if excluded(ip, allow): bucket_stats[1] += 1; continue
+                    raw, matches = match_target(m[3])
                     if not matches: continue
                     if mode == '--top-urls': urls[(domain, raw)] += 1; continue
-                    local_counts[ip] += 1
-                    local_reasons.update((ip, w) for w in matches)
+                    bucket_counts[ip] += 1
+                    bucket_reasons.update((ip, w) for w in matches)
             finally:
                 if reader is not source: reader.close()
             if compressed:
                 end_st = os.fstat(source.fileno())
                 if [end_st.st_size, end_st.st_mtime_ns, end_st.st_ctime_ns] != fingerprint:
                     raise OSError('gzip changed during scan')
-            requests += lr; skipped += ls; malformed += lm; oversized += lo
-            counts.update(local_counts)
-            if local_counts: domains[domain] += sum(local_counts.values())
-            for (ip, word), n in local_reasons.items(): reasons[ip][(domain, word)] += n
-            if cache_enabled:
+            malformed += lm; oversized += lo
+            for bucket_counts, bucket_reasons, (lr, ls, li) in buckets.values():
+                requests += lr; skipped += ls; malformed += li
+                counts.update(bucket_counts)
+                if bucket_counts: domains[domain] += sum(bucket_counts.values())
+                for (ip, word), n in bucket_reasons.items(): reasons[ip][(domain, word)] += n
+            if cache_enabled and not has_future_records:
                 new_cache[key] = {'offset': offset, 'anchor': anchor(source.fileno(), offset), 'fingerprint': fingerprint if compressed else None,
-                    'counts': [(str(i),n) for i,n in local_counts.items()],
-                    'reasons': [(str(i),w,n) for (i,w),n in local_reasons.items()], 'stats': [lr,ls,lm,lo]}
+                    'malformed': lm, 'oversized': lo, 'buckets': {hour: save_bucket(bucket) for hour, bucket in buckets.items()}}
             files += 1
     except UnsafeLog as e:
         unsafe += 1; print(f'WARNING: unsafe log skipped: {str(path)!r}: {str(e)!r}', file=sys.stderr)
@@ -518,7 +578,7 @@ if cache_enabled and files:
     tmp = None
     try:
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=cache_path.parent, delete=False) as cf:
-            tmp = pathlib.Path(cf.name); json.dump({'key':cache_key,'files':new_cache}, cf, separators=(',',':'))
+            tmp = pathlib.Path(cf.name); json.dump({'key':cache_key,'hour':live_hours[-1],'files':new_cache}, cf, separators=(',',':'))
         if tmp.stat().st_size <= CACHE_LIMIT: tmp.replace(cache_path)
         else: tmp.unlink(); print('Cache exceeds size limit; not saved', file=sys.stderr)
     except OSError as e:

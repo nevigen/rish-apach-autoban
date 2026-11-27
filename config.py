@@ -2,10 +2,11 @@
 
 import os, sys, stat, re, tempfile, fcntl
 P='/etc/apache-autoban'; NAME='config.conf'
-DEFAULTS=dict(AUTOBAN_LANG='ru',MIN_REQUESTS='3',BAN_TIME='86400',ZONE='',LOG_DIR='/var/www',STOPWORDS='/root/apache-stopwords.txt',WHITELIST='/root/apache-whitelist.txt',BAN_LOG='/var/log/apache-autoban.log')
+DEFAULTS=dict(AUTOBAN_LANG='ru',MIN_REQUESTS='3',BAN_TIME='86400',ZONE='',AUTOBAN_STRICT_MATCH='0',LOG_DIR='/var/www',STOPWORDS='/root/apache-stopwords.txt',WHITELIST='/root/apache-whitelist.txt',BAN_LOG='/var/log/apache-autoban.log')
 def validate(k,v):
     if k not in DEFAULTS or any(ord(c)<32 or ord(c)==127 for c in v): raise ValueError('Invalid config key/value: '+k)
     if k=='AUTOBAN_LANG': ok=v in ('ru','uk','en')
+    elif k=='AUTOBAN_STRICT_MATCH': ok=v in ('0','1')
     elif k=='MIN_REQUESTS': ok=bool(re.fullmatch(r'[1-9][0-9]{0,5}',v))
     elif k=='BAN_TIME': ok=bool(re.fullmatch(r'[1-9][0-9]{0,7}',v)) and int(v)<=31536000
     elif k=='ZONE': ok=not v or bool(re.fullmatch(r'[A-Za-z0-9_.-]+',v))
