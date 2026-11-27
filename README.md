@@ -16,15 +16,28 @@ AutoBan рассчитан на штатную установку [RISH 2.10.3 �
 
 ## Установка
 
-Выполните от root на сервере, где будет работать AutoBan:
+### Из архива без Git
+
+Выполните от `root` на сервере с RISH. Эта команда подходит и для первой установки, и для обновления:
 
 ```bash
-git clone https://github.com/nevigen/rish-apach-autoban.git
+workdir=$(mktemp -d) &&
+curl -fsSL https://github.com/nevigen/rish-apach-autoban/archive/refs/tags/v1.0.1.tar.gz -o "$workdir/autoban.tar.gz" &&
+tar -xzf "$workdir/autoban.tar.gz" --strip-components=1 -C "$workdir" &&
+bash "$workdir/install.sh"
+```
+
+Если `curl` на сервере недоступен, скачайте ZIP или TAR.GZ в браузере, перенесите его на сервер и выполните `bash install.sh` из распакованной папки. [Архивы релиза](https://github.com/nevigen/rish-apach-autoban/releases/tag/v1.0.1)
+
+### Через Git
+
+Если Git уже установлен, можно получить ту же версию по тегу:
+
+```bash
+git clone --depth 1 --branch v1.0.1 https://github.com/nevigen/rish-apach-autoban.git
 cd rish-apach-autoban
 bash install.sh
 ```
-
-Если Git на сервере не используется, можно скачать и распаковать ZIP репозитория и запустить `bash install.sh` из распакованного каталога.
 
 Установщик запускается от пользователя `root` и берёт файлы из каталога, где лежит `install.sh`. Места установки одинаковы при запуске из любого текущего каталога.
 
