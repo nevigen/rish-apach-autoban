@@ -51,6 +51,7 @@ esac
 command -v python3 >/dev/null || die 'python3 is required'
 exec 9>/run/apache-autoban.lock
 flock -w "$LOCK_WAIT" 9 || { echo "Another AutoBan operation is running (waited ${LOCK_WAIT}s)." >&2; exit 75; }
+[[ -f "$BASE/apache-autoban.sh" ]] || die 'Apache AutoBan was removed while waiting to start'
 
 AUTOBAN_ROTATED=$ROTATED python3 -u - "$LOG_DIR" "$STOPWORDS" "$WHITELIST" "$DATE_FILTER" "$MIN_REQUESTS" "$MODE" "$ZONE" "$BAN_TIME" "$BAN_LOG" <<'PY'
 import sys, pathlib, ipaddress, re, collections, subprocess, datetime, json, os, gzip, time, zlib, stat, hashlib, tempfile, errno
